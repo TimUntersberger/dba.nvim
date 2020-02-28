@@ -1,4 +1,5 @@
 local driver = require('deta/driver')
+require('deta/util')
 
 function psql_row_to_values(s)
   return string.gmatch(s, "[^|]+")
@@ -6,14 +7,6 @@ end
 
 function trim_string(s)
   return string.gsub(s, " ", "")
-end
-
-function map(mapper, t)
-  local result = {}
-  for k, value in pairs(t) do
-    result[k] = mapper(value)
-  end
-  return result
 end
 
 function psql_result_to_table(psql_result)
@@ -52,7 +45,7 @@ function create_psql_driver(connection_string)
       local output = execute_sql(
         string.format(
           [[
-            select * from %s limit %d offset %d
+            select * from %s order by id ASC limit %d offset %d 
           ]], 
           table_name, 
           page_size, 
@@ -70,12 +63,11 @@ function create_psql_driver(connection_string)
           [[
             select t.table_name
             from information_schema.tables t
-            where t.table_catalog = '%s'
+            where t.table_catalog = current_database()
                   and t.table_type = 'BASE TABLE'
                   and t.table_schema not in ('information_schema', 'pg_catalog')
             order by t.table_name;
-          ]], 
-          current_database
+          ]]
         )
       )
       if output == "" then
@@ -94,6 +86,31 @@ function create_psql_driver(connection_string)
         return nil
       end
       return psql_result_to_table(output)
+    end,
+    update = function(table_name, id, changeset)
+      local update_string_parts = {}
+
+      for k, v in pairs(changeset) do
+        table.insert(update_string_parts, k .. " = " .. v)
+      end
+
+      local update_string = table.concat(update_string_parts, ", ")
+
+      execute_sql(
+        string.format(
+          [[
+            update
+              %s
+            set
+              %s
+            where
+              id = %d;
+          ]],
+          table_name,
+          update_string,
+          id
+        )
+      )
     end
   }
 end

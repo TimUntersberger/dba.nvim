@@ -12,6 +12,7 @@ command! -nargs=0 DetaGoNextRow call <SID>GoNextRow()
 command! -nargs=0 DetaGoPreviousRow call <SID>GoPreviousRow()
 command! -nargs=0 DetaGoFirstRow call <SID>GoFirstRow()
 command! -nargs=0 DetaGoLastRow call <SID>GoLastRow()
+command! -nargs=0 DetaEditColumn call <SID>EditColumn()
   
 nnoremap <leader>dg :DetaGetAll 
 nnoremap <leader>dc :DetaConnect 
@@ -55,8 +56,8 @@ function! PrintColumnValues(line, values)
   call PrintColumnValue(a:line, "| " . join(a:values, " | ") . " |", 0)
 endfunction
 
-function! PadColumnValues(values, widths)
-  return map(a:values, {k, v -> PadSpace(v, a:widths[k])})
+function! PadColumnValues(values, widths, valueIsKey)
+  return map(deepcopy(a:values), {k, v -> PadSpace(v, a:widths[a:valueIsKey ? v : k])})
 endfunction
 
 function! SumList(list)
@@ -72,14 +73,18 @@ endfunction
 function! PrintQueryResult(result)
   let l:columnWidths = GetColumnWidthsForQueryResult(a:result)
   let l:columnCount = len(l:columnWidths)
-  let l:seperatorLen = SumList(l:columnWidths) + 3 * (l:columnCount - 1)
+  let l:seperatorLen = SumList(values(l:columnWidths)) + 3 * (l:columnCount - 1)
 
   call PrintSeperator(line('$'), l:seperatorLen, 1)
-  call PrintColumnValues(line('$'), PadColumnValues(a:result.headers, l:columnWidths))
+  call PrintColumnValues(line('$'), PadColumnValues(a:result.headers, l:columnWidths, v:true))
   call PrintSeperator(line('$'), l:seperatorLen, 0)
 
   for l:row in a:result.values
-    call PrintColumnValues(line("$"), PadColumnValues(reverse(values(l:row)), l:columnWidths))
+    let l:rowStr = "|"
+    for l:header in a:result.headers
+      let l:rowStr = l:rowStr . " " . PadSpace(l:row[l:header], l:columnWidths[l:header]) . " |"
+    endfor
+    call PrintColumnValue(line("$"), l:rowStr, v:false)
   endfor
 
   if len(a:result.values) > 0
@@ -103,7 +108,7 @@ function! GetColumnWidthsForQueryResult(result)
     endfor
   endfor
 
-  return reverse(values(map(l:cache, {k, v -> GetMinColumnWidth(v)})))
+  return map(l:cache, {k, v -> GetMinColumnWidth(v)})
 endfunction
 
 function! s:NextTableChunk()
@@ -204,6 +209,41 @@ function! s:GoLastColumn()
   execute 'normal! b'
 endfunction
 
+function! s:EditColumn()
+  let l:index = col('.') - 1
+  let l:lineNumber = line('.')
+  let l:line = getline(l:lineNumber)
+  let l:columnNumber = 0
+  
+  for l:char in split(l:line[0:index], '\zs')
+    if l:char == "|"
+      let l:columnNumber = l:columnNumber + 1
+    endif
+  endfor
+
+  let l:values = g:currentView.result.values[l:line - 3 - 1]
+  let l:headers = g:currentView.result.headers
+  if index(l:headers, 'id') == -1
+    echom "Table does not have a column that is called id"
+    return
+  endif
+  let l:header = l:headers[l:columnNumber - 1]
+  let l:currentValue = l:values[l:header]
+
+  let l:newValue = input(l:header . ": ", l:currentValue)
+
+  let l:changset = {}
+
+  let l:changset[l:header] = l:newValue
+
+  let g:currentView.cursor.x = col('.')
+  let g:currentView.cursor.y = line('.')
+
+  call <SID>Update(g:currentView.name, l:values.id, l:changset)
+
+  call <SID>GetAllRows(g:currentView.name, g:currentView.page, g:currentView.pageSize)
+endfunction
+
 function! s:GoFirstRow()
   if g:currentView.isEnd
     return
@@ -222,25 +262,31 @@ let g:openViews = {}
 let g:currentView = {}
 
 function! s:OpenQueryResultView(title, page, pageSize, result)
-  " TODO: improve table navigation. Probably remap hjkl to move column/row wise instead of char/line wise
   " TODO: make <C-d> and <C-u> jump 5 rows instead of 1
   " TODO: implement a function that edits the value of the current column in
+  " TODO: handle buffer close event to remove buffer from g:openViews
   " the database. (mapped to e in normal mode)
+  " TODO: try to preserve cursor position when going through the chunks
   " TODO(Maybe): implement a function that edits the values of the current row in
   " the database.
 
   " check whether result is a dictionary
   if type(a:result) == 4
+    setlocal modifiable
+    setlocal noreadonly
+
     if has_key(g:openViews, a:title) 
       let g:currentView = g:openViews[a:title]
       execute 'b ' . g:currentView.bid
       execute '1,$d'
-      let g:openViews[a:title].isEnd = len(a:result.values) == 0
+      let g:currentView.isEnd = len(a:result.values) == 0
+      let g:currentView.result = a:result
     else
-      execute 'edit ' . a:title 
+      execute 'enew | setlocal filetype=DetaQueryResultView nobuflisted buftype=nofile bufhidden=wipe noswapfile'
+      
 
-      set nonu
-      set nornu
+      setlocal nonu
+      setlocal nornu
 
       nnoremap <silent> <buffer> ]c :DetaNextTableChunk<CR>
       nnoremap <silent> <buffer> [c :DetaPreviousTableChunk<CR>
@@ -256,19 +302,44 @@ function! s:OpenQueryResultView(title, page, pageSize, result)
       nnoremap <silent> <buffer> <C-u> :DetaGoNextRow<CR>
       nnoremap <silent> <buffer> gg :DetaGoFirstRow<CR>
       nnoremap <silent> <buffer> G :DetaGoLastRow<CR>
+      nnoremap <silent> <buffer> e :DetaEditColumn<CR>
 
       let g:currentView = {
+            \'name': a:title,
             \'bid': bufnr(''),
+            \'result': a:result,
             \'pageSize': 50,
             \'page': 1,
             \'isEnd': len(a:result.values) == 0,
+            \'cursor': {
+            \  'x': 3,
+            \  'y': 2
             \}
+            \}
+
       let g:openViews[a:title] = g:currentView
     endif
 
     call PrintQueryResult(a:result)
+    
+    setlocal nomodifiable
+    setlocal readonly
 
-    call cursor(2, 3)
+    let l:lineCount = line('$')
+    let l:maxCol = col('$')
+
+    if l:lineCount == 3
+      let g:currentView.cursor.y = 2
+      let g:currentView.cursor.x = 3
+    elseif l:lineCount < g:currentView.cursor.y
+      let g:currentView.cursor.y = l:lineCount
+    endif
+
+    if l:maxCol < g:currentView.cursor.x
+      let g:currentView.cursor.x = l:maxCol
+    endif
+
+    call cursor(g:currentView.cursor.y, g:currentView.cursor.x)
 
   endif
 
@@ -282,9 +353,10 @@ function! s:GetAllRows(tableName, ...)
   call <SID>OpenQueryResultView(a:tableName, l:page, l:pageSize, l:result)
 endfunction
 
-function! s:Connect(connectionString)
-  execute 'lua deta.set_connection_string("' . a:connectionString . '")'
+function! s:Update(table, id, changeset)
+  call luaeval('deta.update(_A[1], _A[2], _A[3])', [a:table, a:id, a:changeset])
 endfunction
 
-function! s:ChooseTable()
+function! s:Connect(connectionString)
+  call luaeval('deta.set_connection_string(_A[0])', [a:connectionString])
 endfunction

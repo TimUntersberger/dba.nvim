@@ -20,6 +20,14 @@ function table_to_json(o, indentation)
   end
 end
 
+function map(mapper, table)
+  local result = {}
+  for k,x in pairs(table) do
+    result[k] = mapper(x, k)
+  end
+  return result
+end
+
 function string_to_lines(string)
   return string.gmatch(string, "[^\r\n]+")
 end

@@ -18,5 +18,8 @@ return {
   end,
   get_all_databases = function() 
     return driver.get_all_databases()
+  end,
+  update = function(table, id, changeset)
+    driver.update(table, id, changeset)
   end
 }
