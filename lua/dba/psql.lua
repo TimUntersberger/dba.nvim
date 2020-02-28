@@ -1,4 +1,4 @@
-local driver = require('dba/driver')
+local driver = require('deta/driver')
 
 function psql_row_to_values(s)
   return string.gmatch(s, "[^|]+")
@@ -49,7 +49,6 @@ function create_psql_driver(connection_string)
       execute_sql = driver.execute_sql("psql")(connection_string .. "/" .. current_database)
     end,
     get_all_rows = function(table_name, page_size, page)
-      print(table_name)
       local output = execute_sql(
         string.format(
           [[
@@ -60,6 +59,9 @@ function create_psql_driver(connection_string)
           page_size * (page - 1)
         )
       )
+      if output == "" then
+        return nil
+      end
       return psql_result_to_table(output)
     end,
     get_all_tables = function()
@@ -76,6 +78,9 @@ function create_psql_driver(connection_string)
           current_database
         )
       )
+      if output == "" then
+        return nil
+      end
       return psql_result_to_table(output)
     end,
     get_all_databases = function() 
@@ -85,6 +90,9 @@ function create_psql_driver(connection_string)
         from pg_database
         order by oid;
       ]])
+      if output == "" then
+        return nil
+      end
       return psql_result_to_table(output)
     end
   }
