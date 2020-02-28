@@ -13,6 +13,9 @@ return {
   get_all_rows = function(table_name, page_size, page)
     return driver.get_all_rows(table_name, page_size, page)
   end,
+  get_table_metadata = function(table_name, page_size, page)
+    return driver.get_table_metadata(table_name, page_size, page)
+  end,
   get_all_tables = function()
     return driver.get_all_tables()
   end,

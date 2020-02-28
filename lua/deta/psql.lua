@@ -75,6 +75,45 @@ function create_psql_driver(connection_string)
       end
       return psql_result_to_table(output)
     end,
+    get_table_metadata = function(table_name, page_size, page)
+      local output = execute_sql(
+        string.format(
+          [[
+          select 
+            col.column_name,
+            col.data_type,
+            col.character_maximum_length,
+            col.is_nullable,
+            col.column_default,
+            const.constraint_name,
+            const.constraint_type
+          from 
+            information_schema.columns col 
+          left join 
+            information_schema.constraint_column_usage usage 
+          on 
+            usage.column_name = col.column_name
+          left join
+            information_schema.table_constraints const
+          on
+            const.constraint_name = usage.constraint_name
+          where 
+            col.table_name = '%s'
+          LIMIT 
+            %d                                                    
+          OFFSET
+            %d
+          ]], 
+          table_name, 
+          page_size, 
+          page_size * (page - 1)
+        )
+      )
+      if output == "" then
+        return nil
+      end
+      return psql_result_to_table(output)
+    end,
     get_all_databases = function() 
       local output = execute_sql([[
         select 

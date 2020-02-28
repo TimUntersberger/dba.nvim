@@ -1,6 +1,7 @@
 lua deta = require("deta")
 
 command! -nargs=1 DetaGetAll call <SID>GetAllRows(<q-args>)
+command! -nargs=1 DetaGetTableMetadata call <SID>GetTableMetadata(<q-args>)
 command! -nargs=1 DetaConnect call <SID>Connect(<q-args>)
 command! -nargs=0 DetaNextTableChunk call <SID>NextTableChunk()
 command! -nargs=0 DetaPreviousTableChunk call <SID>PreviousTableChunk()
@@ -16,6 +17,18 @@ command! -nargs=0 DetaEditColumn call <SID>EditColumn()
   
 nnoremap <leader>dg :DetaGetAll 
 nnoremap <leader>dc :DetaConnect 
+
+aug Deta
+  autocmd! * <buffer>
+  au filetype DetaQueryResultView au BufWipeout <buffer> call <SID>OnBufWipeout()
+aug END
+
+function! s:OnBufWipeout()
+  let g:currentView = {}
+
+  aug Deta
+  aug END
+endfunction
 
 function! GetMinColumnWidth(rows)
   let l:width = 0
@@ -112,30 +125,24 @@ function! GetColumnWidthsForQueryResult(result)
 endfunction
 
 function! s:NextTableChunk()
-  let l:bname = bufname('')
+  if g:currentView == {}
+    return
+  endif
 
-  if has_key(g:openViews, l:bname)
-    let l:view = g:openViews[l:bname]
-
-    if l:view.isEnd != 1
-      let l:view.page = l:view.page + 1
-      call <SID>GetAllRows(l:bname, l:view.page, l:view.pageSize)
-    endif
-
-    call <SID>GetAllRows(l:bname, l:view.page, l:view.pageSize)
+  if g:currentView.isEnd != 1
+    let g:currentView.page = g:currentView.page + 1
+    call <SID>GetAllRows(g:currentView.name, g:currentView.page, g:currentView.pageSize)
   endif
 endfunction
 
 function! s:PreviousTableChunk()
-  let l:bname = bufname('')
+  if g:currentView == {}
+    return
+  endif
 
-  if has_key(g:openViews, l:bname)
-    let l:view = g:openViews[l:bname]
-
-    if l:view.page != 1
-      let l:view.page = l:view.page - 1
-      call <SID>GetAllRows(l:bname, l:view.page, l:view.pageSize)
-    endif
+  if g:currentView.page != 1
+    let g:currentView.page = g:currentView.page - 1
+    call <SID>GetAllRows(g:currentView.name, g:currentView.page, g:currentView.pageSize)
   endif
 endfunction
 
@@ -164,6 +171,7 @@ function! s:GoNextRow()
   if <SID>LineIsSeperator(line('.'))
     call cursor(l:line + 2, l:column)
   endif
+  call UpdateCursorPosition()
 endfunction
 
 function! s:GoPreviousRow()
@@ -179,6 +187,7 @@ function! s:GoPreviousRow()
   if <SID>LineIsSeperator(line('.'))
     call cursor(l:line - 2, l:column)
   endif
+  call UpdateCursorPosition()
 endfunction
 
 function! s:GoNextColumn()
@@ -188,6 +197,7 @@ function! s:GoNextColumn()
   else
     execute 'normal! b'
   endif
+  call UpdateCursorPosition()
 endfunction
 
 function! s:GoPreviousColumn()
@@ -197,16 +207,19 @@ function! s:GoPreviousColumn()
   else
     execute 'normal! w'
   endif
+  call UpdateCursorPosition()
 endfunction
 
 function! s:GoFirstColumn()
   execute 'normal! 0'
   execute 'normal! w'
+  call UpdateCursorPosition()
 endfunction
 
 function! s:GoLastColumn()
   execute 'normal! $'
   execute 'normal! b'
+  call UpdateCursorPosition()
 endfunction
 
 function! s:EditColumn()
@@ -236,54 +249,62 @@ function! s:EditColumn()
 
   let l:changset[l:header] = l:newValue
 
-  let g:currentView.cursor.x = col('.')
-  let g:currentView.cursor.y = line('.')
+  call UpdateCursorPosition()
 
   call <SID>Update(g:currentView.name, l:values.id, l:changset)
 
   call <SID>GetAllRows(g:currentView.name, g:currentView.page, g:currentView.pageSize)
 endfunction
 
+function! UpdateCursorPosition()
+  if g:currentView == {}
+    return
+  endif
+
+  let g:currentView.cursor.y = line('.')
+  let g:currentView.cursor.x = col('.')
+endfunction
+
 function! s:GoFirstRow()
   if g:currentView.isEnd
     return
   endif
+
   call cursor(4, col('.'))
+  call UpdateCursorPosition()
 endfunction
 
 function! s:GoLastRow()
   if g:currentView.isEnd
     return
   endif
+
   call cursor(line('$') - 1, col('.'))
+  call UpdateCursorPosition()
 endfunction
 
-let g:openViews = {}
 let g:currentView = {}
 
 function! s:OpenQueryResultView(title, page, pageSize, result)
   " TODO: make <C-d> and <C-u> jump 5 rows instead of 1
-  " TODO: implement a function that edits the value of the current column in
-  " TODO: handle buffer close event to remove buffer from g:openViews
-  " the database. (mapped to e in normal mode)
-  " TODO: try to preserve cursor position when going through the chunks
+  " TODO: enable a way to cancel an edit
+  " TODO: make it possible to swap between metadata and data of table with a
+  " dash
   " TODO(Maybe): implement a function that edits the values of the current row in
   " the database.
 
   " check whether result is a dictionary
   if type(a:result) == 4
     setlocal modifiable
+    setlocal nowrap
     setlocal noreadonly
 
-    if has_key(g:openViews, a:title) 
-      let g:currentView = g:openViews[a:title]
-      execute 'b ' . g:currentView.bid
+    if g:currentView != {}
       execute '1,$d'
       let g:currentView.isEnd = len(a:result.values) == 0
       let g:currentView.result = a:result
     else
       execute 'enew | setlocal filetype=DetaQueryResultView nobuflisted buftype=nofile bufhidden=wipe noswapfile'
-      
 
       setlocal nonu
       setlocal nornu
@@ -316,8 +337,6 @@ function! s:OpenQueryResultView(title, page, pageSize, result)
             \  'y': 2
             \}
             \}
-
-      let g:openViews[a:title] = g:currentView
     endif
 
     call PrintQueryResult(a:result)
@@ -328,7 +347,7 @@ function! s:OpenQueryResultView(title, page, pageSize, result)
     let l:lineCount = line('$')
     let l:maxCol = col('$')
 
-    if l:lineCount == 3
+    if g:currentView.cursor.y != 2 && l:lineCount == 3
       let g:currentView.cursor.y = 2
       let g:currentView.cursor.x = 3
     elseif l:lineCount < g:currentView.cursor.y
@@ -340,7 +359,6 @@ function! s:OpenQueryResultView(title, page, pageSize, result)
     endif
 
     call cursor(g:currentView.cursor.y, g:currentView.cursor.x)
-
   endif
 
 endfunction
@@ -349,6 +367,14 @@ function! s:GetAllRows(tableName, ...)
   let l:page = a:0 >= 1 ? a:1 : 1
   let l:pageSize = a:0 >= 2 ? a:2 : 50
   let l:result = luaeval('deta.get_all_rows(_A[1], _A[2], _A[3])', [a:tableName, l:pageSize, l:page])
+
+  call <SID>OpenQueryResultView(a:tableName, l:page, l:pageSize, l:result)
+endfunction
+
+function! s:GetTableMetadata(tableName, ...)
+  let l:page = a:0 >= 1 ? a:1 : 1
+  let l:pageSize = a:0 >= 2 ? a:2 : 50
+  let l:result = luaeval('deta.get_table_metadata(_A[1], _A[2], _A[3])', [a:tableName, l:pageSize, l:page])
 
   call <SID>OpenQueryResultView(a:tableName, l:page, l:pageSize, l:result)
 endfunction
