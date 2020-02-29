@@ -22,7 +22,13 @@ return {
   get_all_databases = function() 
     return driver.get_all_databases()
   end,
+  execute_sql = function(sql) 
+    return driver.execute_sql(sql)
+  end,
   update = function(table, id, changeset)
     driver.update(table, id, changeset)
+  end,
+  delete = function(table, id)
+    driver.delete(table, id)
   end
 }

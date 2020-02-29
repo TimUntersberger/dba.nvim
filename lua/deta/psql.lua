@@ -36,7 +36,10 @@ function create_psql_driver(connection_string)
   local current_database = nil
 
   return {
-    execute_sql = execute_sql,
+    execute_sql = function(sql)
+      local result = execute_sql(sql)
+      return psql_result_to_table(result)
+    end,
     set_database = function(database)
       current_database = database
       execute_sql = driver.execute_sql("psql")(connection_string .. "/" .. current_database)
@@ -125,6 +128,20 @@ function create_psql_driver(connection_string)
         return nil
       end
       return psql_result_to_table(output)
+    end,
+    delete = function(table_name, id)
+      execute_sql(
+        string.format(
+          [[
+            delete from
+              %s
+            where
+              id = %d;
+          ]],
+          table_name,
+          id
+        )
+      )
     end,
     update = function(table_name, id, changeset)
       local update_string_parts = {}
