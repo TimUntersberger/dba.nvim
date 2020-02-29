@@ -1,17 +1,12 @@
 " TODO: make <C-d> and <C-u> jump 5 rows instead of 1
-" TODO: insert row
+" TODO: add prompt for deletion
 " TODO(Maybe): Support smart actions like row deletion for custom queries
-" TODO: get primary key field automatically with sql query
-" TODO: make $ go to the last column with a value insteado the the last column
-" overall 
-" TODO: finish selecttable implementation
-" TODO: start selectdatabase implementation
+" TODO: improve error handling
 " TODO: start selectconnection implementation
 " TODO: DetaRunQuery support non select statements.
 " Probably should implement a driver method that detects what type of query it
 " is. On the vim side we just check whether the type is a select statement to
 " know whether to display the result in a DetaQueryResultView or not
-" TODO: implement DetaRunQuery command for running selected query
 
 lua deta = require("deta")
 
@@ -23,11 +18,12 @@ let s:defaultValues = {
 
 command! -nargs=1 DetaGetAll call <SID>GetAllRows(<q-args>)
 command! -nargs=1 DetaGetTableMetadata call <SID>GetTableMetadata(<q-args>)
+command! -nargs=1 DetaSetDatabase call <SID>SetDatabase(<q-args>)
 command! -nargs=1 DetaConnect call <SID>Connect(<q-args>)
-command! -nargs=0 DetaTables call <SID>ChooseTable()
+command! -nargs=0 DetaTables execute 'Clap deta_tables'
 command! -nargs=0 -range DetaRunSelectedQuery call <SID>RunSelectedQuery()
 command! -nargs=* DetaRunQuery call <SID>RunQuery(<q-args>)
-command! -nargs=0 DetaDatabases call <SID>ChooseDatabase()
+command! -nargs=0 DetaDatabases execute 'Clap deta_databases'
 command! -nargs=0 DetaConnections call <SID>ChooseConnection()
 command! -nargs=0 DetaNextTableChunk call <SID>NextTableChunk()
 command! -nargs=0 DetaPreviousTableChunk call <SID>PreviousTableChunk()
@@ -41,11 +37,13 @@ command! -nargs=0 DetaGoFirstRow call <SID>GoFirstRow()
 command! -nargs=0 DetaGoLastRow call <SID>GoLastRow()
 command! -nargs=0 DetaEditColumn call <SID>EditColumn()
 command! -nargs=0 DetaDeleteRow call <SID>DeleteRow()
+command! -nargs=0 DetaInsertRow call <SID>InsertRow()
 command! -nargs=0 DetaToggleMetadata call <SID>ToggleMetadata()
   
 nnoremap <leader>dg :DetaGetAll 
 nnoremap <leader>dc :DetaConnect 
 nnoremap <leader>dt :DetaTables<CR>
+nnoremap <leader>dd :DetaDatabases<CR>
 nnoremap <leader>dq :DetaRunQuery 
 vnoremap <silent> <leader>dq :DetaRunSelectedQuery<CR>
 
@@ -85,6 +83,10 @@ function! s:ExecuteQuery(sql)
 
   call <SID>OpenQueryResultView("query", s:defaultValues.pageSize, s:defaultValues.page,
         \ l:result, v:null, v:false, v:true)
+endfunction
+
+function! s:SetDatabase(db)
+  call luaeval('deta.set_database(_A[1])', [a:db])
 endfunction
 
 function! GetMinColumnWidth(rows)
@@ -251,9 +253,19 @@ function! s:GoNextColumn()
   execute 'normal! f|'
   if col('.') != strlen(getline('.'))
     execute 'normal! w'
+
+    if getline('.')[col('.') - 1] == '|'
+      execute 'normal! b'
+      call cursor(line('.'), col('.') + 2)
+    endif
   else
     execute 'normal! b'
+
+    if getline('.')[col('.') - 1] == '|'
+      call cursor(line('.'), col('.') + 2)
+    endif
   endif
+
   call UpdateCursorPosition()
 endfunction
 
@@ -261,8 +273,18 @@ function! s:GoPreviousColumn()
   execute 'normal! F|'
   if col('.') != 1
     execute 'normal! b'
+
+    if getline('.')[col('.') - 1] == '|'
+      call cursor(line('.'), col('.') + 2)
+    endif
   else
     execute 'normal! w'
+
+    if getline('.')[col('.') - 1] == '|'
+    execute 'normal! b'
+
+      call cursor(line('.'), col('.') + 2)
+    endif
   endif
   call UpdateCursorPosition()
 endfunction
@@ -280,13 +302,36 @@ function! s:GoLastColumn()
 endfunction
 
 function! s:DeleteRow()
+  if s:currentView.result.pk == ''
+    echom "Table does not have a primary key column"
+    return
+  endif
+
   let l:lineNumber = line('.')
   let l:row = s:currentView.result.values[l:lineNumber - 3 - 1]
-  let l:pk = l:row["id"]
+  let l:pk = l:row[s:currentView.result.pk]
 
   call UpdateCursorPosition()
 
   call luaeval('deta.delete(_A[1], _A[2])', [s:currentView.name, l:pk])
+
+  call <SID>GetAllRows(s:currentView.name, s:currentView.page, s:currentView.pageSize)
+endfunction
+
+function! s:InsertRow()
+  let l:lineNumber = line('.')
+  let l:headers = s:currentView.result.headers
+  let l:entity = {}
+
+  for l:header in l:headers
+    if l:header != s:currentView.result.pk
+      let l:entity[l:header] = input(l:header . ": ")
+    endif
+  endfor
+
+  call UpdateCursorPosition()
+
+  call luaeval('deta.insert(_A[1], _A[2])', [s:currentView.name, l:entity])
 
   call <SID>GetAllRows(s:currentView.name, s:currentView.page, s:currentView.pageSize)
 endfunction
@@ -305,8 +350,8 @@ function! s:EditColumn()
 
   let l:values = s:currentView.result.values[l:lineNumber - 3 - 1]
   let l:headers = s:currentView.result.headers
-  if index(l:headers, 'id') == -1
-    echom "Table does not have a column that is called id"
+  if s:currentView.result.pk == ''
+    echom "Table does not have a primary key column"
     return
   endif
   let l:header = l:headers[l:columnNumber - 1]
@@ -405,8 +450,9 @@ function! s:OpenQueryResultView(title, page, pageSize, result, generator, isMeta
 
         nnoremap <silent> <buffer> ]c :DetaNextTableChunk<CR>
         nnoremap <silent> <buffer> [c :DetaPreviousTableChunk<CR>
-        nnoremap <silent> <buffer> i :DetaEditColumn<CR>
+        nnoremap <silent> <buffer> e :DetaEditColumn<CR>
         nnoremap <silent> <buffer> dd :DetaDeleteRow<CR>
+        nnoremap <silent> <buffer> i :DetaInsertRow<CR>
         nnoremap <silent> <buffer> - :DetaToggleMetadata<CR>
 
       endif
@@ -457,6 +503,8 @@ function! s:GetAllRows(tableName, ...)
   let l:pageSize = a:0 >= 2 ? a:2 : 50
   let l:result = luaeval('deta.get_all_rows(_A[1], _A[2], _A[3])', [a:tableName, l:pageSize, l:page])
 
+  echo l:result.pk
+
   call <SID>OpenQueryResultView(a:tableName, l:page, l:pageSize, l:result, 
         \function("s:GetAllRows", [a:tableName]), v:false, v:false)
 endfunction
@@ -478,13 +526,35 @@ function! s:Connect(connectionString)
   call luaeval('deta.set_connection_string(_A[0])', [a:connectionString])
 endfunction
 
-function! s:ChooseTable()
-  let l:result = luaeval('deta.get_all_tables')
-
-  let g:clap_provider_deta_tables = {
-    \ 'source': l:result,
-    \ 'sink': 'echo'
-    \ }
-
-  :Clap deta_tables
+function! s:ChooseDatabaseSink(selected)
+  execute "DetaSetDatabase " . a:selected
 endfunction
+
+function! s:ChooseDatabase()
+  let l:result = luaeval('deta.get_all_databases()')
+  let l:source = map(deepcopy(l:result.values), {i, v -> v.database_name})
+
+  return l:source
+endfunction
+
+function! s:ChooseTableSink(selected)
+  execute "DetaGetAll " . a:selected
+endfunction
+
+function! s:ChooseTable()
+  let l:result = luaeval('deta.get_all_tables()')
+  " if the result is not a dictionary (implicitely meaning v:null)
+  let l:source = type(l:result) != 4 ? [] : map(deepcopy(l:result.values), {i, v -> v.table_name})
+
+  return l:source
+endfunction
+
+let g:clap_provider_deta_tables = {
+  \ 'source': function('s:ChooseTable'),
+  \ 'sink': function('s:ChooseTableSink')
+  \ }
+let g:clap_provider_deta_databases = {
+  \ 'source': function('s:ChooseDatabase'),
+  \ 'sink': function('s:ChooseDatabaseSink')
+  \ }
+

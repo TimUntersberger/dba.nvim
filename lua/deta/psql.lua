@@ -45,34 +45,95 @@ function create_psql_driver(connection_string)
       execute_sql = driver.execute_sql("psql")(connection_string .. "/" .. current_database)
     end,
     get_all_rows = function(table_name, page_size, page)
+      local pkOutput = execute_sql(
+        string.format(
+          [[
+          select 
+            col.column_name
+          from 
+            information_schema.columns col 
+          left join 
+            information_schema.constraint_column_usage usage 
+          on 
+            usage.column_name = col.column_name
+          left join
+            information_schema.table_constraints const
+          on
+            const.constraint_name = usage.constraint_name
+          where 
+            col.table_name = '%s'
+            and const.constraint_type = 'PRIMARY KEY'
+          LIMIT 
+            1
+          ]], 
+          table_name
+        )
+      )
+
+      local pk = psql_result_to_table(pkOutput).values[1]
+
+      local orderBy = ''
+
+      if pk ~= nil then
+        orderBy = 'order by ' .. pk.column_name .. ' ASC'
+      end
+
       local output = execute_sql(
         string.format(
           [[
-            select * from %s order by id ASC limit %d offset %d 
+            select * from 
+              %s
+            %s
+            limit %d 
+            offset %d 
           ]], 
           table_name, 
+          orderBy,
           page_size, 
           page_size * (page - 1)
         )
       )
-      if output == "" then
-        return nil
+
+      local result = psql_result_to_table(output)
+
+      result.pk = ''
+
+      if pk ~= nil then
+        result.pk = pk.column_name
       end
-      return psql_result_to_table(output)
+
+      return result
     end,
     get_all_tables = function()
-      local output = execute_sql(
-        string.format(
-          [[
-            select t.table_name
-            from information_schema.tables t
-            where t.table_catalog = current_database()
-                  and t.table_type = 'BASE TABLE'
-                  and t.table_schema not in ('information_schema', 'pg_catalog')
-            order by t.table_name;
-          ]]
+      local output = {}
+      if current_database == nil then
+        output = execute_sql(
+          string.format(
+            [[
+              select t.table_name
+              from information_schema.tables t
+              where t.table_catalog = current_database()
+                and t.table_type = 'BASE TABLE'
+                and t.table_schema not in ('information_schema', 'pg_catalog')
+              order by t.table_name;
+            ]]
+          )
         )
-      )
+      else
+        output = execute_sql(
+          string.format(
+            [[
+              select t.table_name
+              from information_schema.tables t
+              where t.table_catalog = '%s'
+                and t.table_type = 'BASE TABLE'
+                and t.table_schema not in ('information_schema', 'pg_catalog')
+              order by t.table_name;
+            ]],
+            current_database
+          )
+        )
+      end
       if output == "" then
         return nil
       end
@@ -143,11 +204,47 @@ function create_psql_driver(connection_string)
         )
       )
     end,
+    insert = function(table_name, changeset)
+      local headers = {}
+      local values = {}
+
+      for k, v in pairs(changeset) do
+        table.insert(headers, k)
+        local v_as_num = tonumber(v)
+        if v_as_num == nil then
+          table.insert(values, "'" .. v .. "'")
+        else
+          table.insert(values, v)
+        end
+      end
+
+      local headers_string = table.concat(headers, ", ")
+      local values_string = table.concat(values, ", ")
+
+      execute_sql(
+        string.format(
+          [[
+            insert into
+              %s(%s)
+            values
+              (%s)
+          ]],
+          table_name,
+          headers_string,
+          values_string
+        )
+      )
+    end,
     update = function(table_name, id, changeset)
       local update_string_parts = {}
 
       for k, v in pairs(changeset) do
-        table.insert(update_string_parts, k .. " = " .. v)
+        local v_as_num = tonumber(v)
+        if v_as_num == nil then
+          table.insert(update_string_parts, k .. " = '" .. v .. "'")
+        else
+          table.insert(update_string_parts, k .. " = " .. v)
+        end
       end
 
       local update_string = table.concat(update_string_parts, ", ")

@@ -25,6 +25,9 @@ return {
   execute_sql = function(sql) 
     return driver.execute_sql(sql)
   end,
+  insert = function(table, entity)
+    driver.insert(table, entity)
+  end,
   update = function(table, id, changeset)
     driver.update(table, id, changeset)
   end,
