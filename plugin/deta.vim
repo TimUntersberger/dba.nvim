@@ -1,13 +1,3 @@
-" TODO: make <C-d> and <C-u> jump 5 rows instead of 1
-" TODO: add prompt for deletion
-" TODO(Maybe): Support smart actions like row deletion for custom queries
-" TODO: improve error handling
-" TODO: start selectconnection implementation
-" TODO: DetaRunQuery support non select statements.
-" Probably should implement a driver method that detects what type of query it
-" is. On the vim side we just check whether the type is a select statement to
-" know whether to display the result in a DetaQueryResultView or not
-
 lua deta = require("deta")
 
 let s:currentView = {}
